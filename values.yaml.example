@@ -1,0 +1,26 @@
+# Example values file for templating KVS values
+# Usage: shelly-gitops push --values values.yaml
+
+# Environment configuration
+environment: production
+region: eu-west-1
+
+# API endpoints
+api:
+  endpoint: https://api.example.com
+  timeout: 30
+
+# Thresholds and settings
+thresholds:
+  temperature: 22.5
+  humidity: 60
+
+# Feature flags
+features:
+  enableLogging: true
+  debugMode: false
+
+# Custom settings
+settings:
+  updateInterval: 300
+  maxRetries: 3

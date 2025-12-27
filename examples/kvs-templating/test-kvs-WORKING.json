@@ -1,0 +1,8 @@
+{
+  "comment": "This example uses the index function - ALWAYS WORKS",
+  "test1": "{{ index . \"test_key\" }}",
+  "test2": "{{ index . \"testKey\" }}",
+  "api_url": "{{ index .api \"endpoint\" }}",
+  "api_secret": "{{ index .api \"key\" }}",
+  "timeout_value": "{{ index .settings \"timeout\" }}"
+}

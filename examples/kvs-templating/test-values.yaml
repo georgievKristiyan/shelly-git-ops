@@ -1,0 +1,17 @@
+# Simple test values file
+
+# Simple key-value (no underscores)
+testKey: "test_value3"
+
+# Key with underscore
+test_key: "test_value3"
+
+# Nested values
+api:
+  endpoint: "https://api.example.com"
+  key: "secret123"
+
+# Numbers and booleans
+settings:
+  timeout: 30
+  enabled: true

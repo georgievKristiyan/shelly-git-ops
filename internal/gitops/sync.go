@@ -245,6 +245,42 @@ func (sm *SyncManager) pullDeviceConfig(ctx context.Context, device storage.Devi
 		fmt.Fprintf(os.Stderr, "Warning: Failed to list webhooks for %s: %v\n", device.Name, err)
 	}
 
+	// Get and save KVS (Key-Value Store) data
+	kvsData, err := sm.shellyClient.GetKVS(ctx, device.IPAddress)
+	kvsCount := 0
+	if err == nil && len(kvsData) > 0 {
+		// Load existing local KVS to preserve templates
+		existingKVS, _ := sm.deviceStorage.LoadKVS(device.Folder)
+
+		// Start with existing local KVS to preserve all keys (including templates)
+		mergedKVS := make(map[string]interface{})
+		for key, value := range existingKVS {
+			mergedKVS[key] = value
+		}
+
+		// Update with device values, but only if local value is NOT templated
+		for key, deviceValue := range kvsData {
+			if existingValue, exists := existingKVS[key]; exists {
+				// Check if the existing local value is templated
+				if strValue, ok := existingValue.(string); ok && IsTemplated(strValue) {
+					// Skip - preserve the template, don't overwrite
+					continue
+				}
+			}
+			// Not templated or doesn't exist locally, update with device value
+			mergedKVS[key] = deviceValue
+		}
+
+		if err := sm.deviceStorage.SaveKVS(device.Folder, mergedKVS); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to save KVS data for %s: %v\n", device.Name, err)
+		} else {
+			kvsCount = len(mergedKVS)
+		}
+	} else if err != nil {
+		// Log warning but don't fail - KVS might not be supported on this device
+		fmt.Fprintf(os.Stderr, "Warning: Failed to get KVS data for %s: %v\n", device.Name, err)
+	}
+
 	// Get all components (including virtual components and groups)
 	components, err := sm.shellyClient.GetComponents(ctx, device.IPAddress)
 	virtualComponentCount := 0
@@ -339,6 +375,9 @@ func (sm *SyncManager) pullDeviceConfig(ctx context.Context, device storage.Devi
 	if webhookCount > 0 {
 		msgParts = append(msgParts, fmt.Sprintf("%d webhook(s)", webhookCount))
 	}
+	if kvsCount > 0 {
+		msgParts = append(msgParts, fmt.Sprintf("%d KVS item(s)", kvsCount))
+	}
 
 	// Add virtual component and group counts
 	if virtualComponentCount > 0 {
@@ -357,16 +396,44 @@ func (sm *SyncManager) pullDeviceConfig(ctx context.Context, device storage.Devi
 	return result
 }
 
-// PushToDevices applies current local configuration to all devices
-func (sm *SyncManager) PushToDevices(ctx context.Context, dryRun bool) ([]SyncResult, error) {
-	// Push to all devices in parallel
-	g, ctx := errgroup.WithContext(ctx)
-	results := make([]SyncResult, len(sm.manifest.Devices))
+// PushToDevices applies current local configuration to devices
+// If deviceFilter is empty, pushes to all devices
+// If deviceFilter is provided, only pushes to devices matching the filter (by ID or name)
+// If valuesFile is provided, it will be used for templating KVS values
+func (sm *SyncManager) PushToDevices(ctx context.Context, dryRun bool, deviceFilter []string, valuesFile string) ([]SyncResult, error) {
+	// Load values file if provided
+	values, err := LoadValuesFile(valuesFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load values file: %w", err)
+	}
+	// Filter devices if a filter is provided
+	devicesToPush := sm.manifest.Devices
+	if len(deviceFilter) > 0 {
+		// Create a map for quick lookup
+		filterMap := make(map[string]bool)
+		for _, f := range deviceFilter {
+			filterMap[strings.ToLower(f)] = true
+		}
 
-	for i, device := range sm.manifest.Devices {
+		// Filter devices
+		var filtered []storage.Device
+		for _, device := range sm.manifest.Devices {
+			// Match by device ID or name (case-insensitive)
+			if filterMap[strings.ToLower(device.DeviceID)] || filterMap[strings.ToLower(device.Name)] {
+				filtered = append(filtered, device)
+			}
+		}
+		devicesToPush = filtered
+	}
+
+	// Push to filtered devices in parallel
+	g, ctx := errgroup.WithContext(ctx)
+	results := make([]SyncResult, len(devicesToPush))
+
+	for i, device := range devicesToPush {
 		i, device := i, device
 		g.Go(func() error {
-			result := sm.pushDeviceConfig(ctx, device, dryRun)
+			result := sm.pushDeviceConfig(ctx, device, dryRun, values)
 			results[i] = result
 			return nil
 		})
@@ -380,7 +447,7 @@ func (sm *SyncManager) PushToDevices(ctx context.Context, dryRun bool) ([]SyncRe
 }
 
 // pushDeviceConfig pushes configuration to a single device
-func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Device, dryRun bool) SyncResult {
+func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Device, dryRun bool, values Values) SyncResult {
 	result := SyncResult{
 		DeviceID: device.DeviceID,
 		Success:  false,
@@ -634,6 +701,49 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 		}
 	}
 
+	// Push KVS (Key-Value Store) data
+	localKVS, err := sm.deviceStorage.LoadKVS(device.Folder)
+	kvsCount := 0
+	if err == nil && len(localKVS) > 0 {
+		// Get current KVS data from device for comparison
+		deviceKVS, err := sm.shellyClient.GetKVS(ctx, device.IPAddress)
+		if err != nil {
+			// KVS might not be supported on this device, skip silently
+			deviceKVS = make(map[string]interface{})
+		}
+
+		// Set or update keys from local KVS (with template rendering)
+		for key, value := range localKVS {
+			// Render template if value is templated
+			renderedValue, wasTemplated, err := RenderKVSValue(value, values)
+			if err != nil {
+				result.Message = fmt.Sprintf("failed to render template for KVS key %s: %v", key, err)
+				continue
+			}
+
+			// Use rendered value for push
+			if err := sm.shellyClient.SetKVS(ctx, device.IPAddress, key, renderedValue); err != nil {
+				result.Message = fmt.Sprintf("failed to set KVS key %s: %v", key, err)
+				continue
+			}
+
+			if wasTemplated {
+				fmt.Fprintf(os.Stderr, "Info: Rendered template for KVS key %s\n", key)
+			}
+
+			kvsCount++
+		}
+
+		// Delete keys that exist on device but not locally
+		for key := range deviceKVS {
+			if _, exists := localKVS[key]; !exists {
+				if err := sm.shellyClient.DeleteKVS(ctx, device.IPAddress, key); err != nil {
+					result.Message = fmt.Sprintf("failed to delete KVS key %s: %v", key, err)
+				}
+			}
+		}
+	}
+
 	result.Success = true
 
 	// Build success message
@@ -649,6 +759,9 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 	}
 	if webhookCount > 0 {
 		msgParts = append(msgParts, fmt.Sprintf("%d webhook(s)", webhookCount))
+	}
+	if kvsCount > 0 {
+		msgParts = append(msgParts, fmt.Sprintf("%d KVS item(s)", kvsCount))
 	}
 
 	if len(msgParts) > 0 {

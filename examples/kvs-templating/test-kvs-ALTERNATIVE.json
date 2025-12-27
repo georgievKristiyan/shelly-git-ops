@@ -1,0 +1,7 @@
+{
+  "comment": "This example uses dot notation - may have issues with underscores",
+  "test1": "{{ .testKey }}",
+  "api_url": "{{ .api.endpoint }}",
+  "api_secret": "{{ .api.key }}",
+  "note": "Keys with underscores like test_key may not work with dot notation"
+}

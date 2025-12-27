@@ -1,0 +1,28 @@
+# Example values file for KVS templating
+
+environment: production
+region: eu-west-1
+
+# API configuration
+api:
+  endpoint: https://api.example.com/v1
+  key: your-secret-api-key-here
+  timeout: 30
+
+# Device thresholds
+thresholds:
+  temperature: 22.5
+  humidity: 60
+  power: 1000
+
+# Update intervals (in seconds)
+settings:
+  updateInterval: 300
+  retryInterval: 60
+  maxRetries: 3
+
+# Feature flags
+features:
+  enableLogging: true
+  debugMode: false
+  autoUpdate: true

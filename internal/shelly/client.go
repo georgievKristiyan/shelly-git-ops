@@ -446,6 +446,84 @@ func (c *Client) DeleteWebhook(ctx context.Context, deviceIP string, webhookID i
 	return err
 }
 
+// SetKVS sets a key-value pair in the device's KVS
+func (c *Client) SetKVS(ctx context.Context, deviceIP, key string, value interface{}) error {
+	params := map[string]interface{}{
+		"key":   key,
+		"value": value,
+	}
+	_, err := c.Call(ctx, deviceIP, "KVS.Set", params)
+	return err
+}
+
+// DeleteKVS deletes a key from the device's KVS
+func (c *Client) DeleteKVS(ctx context.Context, deviceIP, key string) error {
+	params := map[string]interface{}{
+		"key": key,
+	}
+	_, err := c.Call(ctx, deviceIP, "KVS.Delete", params)
+	return err
+}
+
+// GetKVS retrieves all key-value store data from a device
+func (c *Client) GetKVS(ctx context.Context, deviceIP string) (map[string]interface{}, error) {
+	// First, list all KVS keys
+	result, err := c.Call(ctx, deviceIP, "KVS.List", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// KVS.List returns: {"keys": {"key1": {"etag": "..."}, "key2": {...}}, "rev": 35}
+	var listResponse struct {
+		Keys map[string]interface{} `json:"keys"`
+		Rev  int                    `json:"rev"`
+	}
+	if err := json.Unmarshal(result, &listResponse); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal KVS keys: %w", err)
+	}
+
+	// If no keys, return empty map
+	if len(listResponse.Keys) == 0 {
+		return make(map[string]interface{}), nil
+	}
+
+	// Extract key names from the map
+	keyNames := make([]string, 0, len(listResponse.Keys))
+	for key := range listResponse.Keys {
+		keyNames = append(keyNames, key)
+	}
+
+	// Get all values using KVS.GetMany
+	result, err = c.Call(ctx, deviceIP, "KVS.GetMany", map[string]interface{}{
+		"keys": keyNames,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// KVS.GetMany returns: {"items": [{"key": "k1", "etag": "...", "value": ...}], "offset": 0, "total": N}
+	var getManyResponse struct {
+		Items []struct {
+			Key   string      `json:"key"`
+			Etag  string      `json:"etag"`
+			Value interface{} `json:"value"`
+		} `json:"items"`
+		Offset int `json:"offset"`
+		Total  int `json:"total"`
+	}
+	if err := json.Unmarshal(result, &getManyResponse); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal KVS values: %w", err)
+	}
+
+	// Convert array to map
+	kvsData := make(map[string]interface{})
+	for _, item := range getManyResponse.Items {
+		kvsData[item.Key] = item.Value
+	}
+
+	return kvsData, nil
+}
+
 // GetComponents retrieves all components including virtual components and groups
 // Handles pagination automatically to fetch all components
 func (c *Client) GetComponents(ctx context.Context, deviceIP string) ([]ComponentInfo, error) {

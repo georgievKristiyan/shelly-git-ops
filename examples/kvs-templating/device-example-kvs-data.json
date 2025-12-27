@@ -1,0 +1,18 @@
+{
+  "api_endpoint": "{{ .api.endpoint }}",
+  "api_key": "{{ .api.key }}",
+  "api_timeout": "{{ .api.timeout }}",
+  "environment": "{{ .environment }}",
+  "region": "{{ .region }}",
+  "temp_threshold": "{{ .thresholds.temperature }}",
+  "humidity_threshold": "{{ .thresholds.humidity }}",
+  "power_limit": "{{ .thresholds.power }}",
+  "update_interval": "{{ index .settings \"updateInterval\" }}",
+  "retry_interval": "{{ index .settings \"retryInterval\" }}",
+  "max_retries": "{{ index .settings \"maxRetries\" }}",
+  "logging_enabled": "{{ index .features \"enableLogging\" }}",
+  "debug_mode": "{{ index .features \"debugMode\" }}",
+  "auto_update": "{{ index .features \"autoUpdate\" }}",
+  "device_name": "Living Room Shelly",
+  "device_location": "First Floor"
+}

@@ -379,6 +379,29 @@ func (ds *DeviceStorage) SaveKVS(folderName string, data map[string]interface{})
 	return nil
 }
 
+// LoadKVS loads key-value store data
+func (ds *DeviceStorage) LoadKVS(folderName string) (map[string]interface{}, error) {
+	devicePath := ds.GetDevicePath(folderName)
+	kvsPath := filepath.Join(devicePath, "kvs", "data.json")
+
+	// If file doesn't exist, return empty map
+	if _, err := os.Stat(kvsPath); os.IsNotExist(err) {
+		return make(map[string]interface{}), nil
+	}
+
+	data, err := os.ReadFile(kvsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read KVS data: %w", err)
+	}
+
+	var kvsData map[string]interface{}
+	if err := json.Unmarshal(data, &kvsData); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal KVS data: %w", err)
+	}
+
+	return kvsData, nil
+}
+
 // SaveSchedule saves a schedule to file
 func (ds *DeviceStorage) SaveSchedule(folderName string, schedule *shelly.Schedule) error {
 	devicePath := ds.GetDevicePath(folderName)
