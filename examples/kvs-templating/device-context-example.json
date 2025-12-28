@@ -1,0 +1,18 @@
+{
+  "comment": "Example KVS demonstrating device context templating",
+
+  "current_device_ip": "{{ .device.ip_address }}",
+  "current_device_name": "{{ .device.name }}",
+  "current_device_id": "{{ .device.device_id }}",
+  "current_device_mac": "{{ .device.mac_address }}",
+  "current_device_model": "{{ .device.model }}",
+
+  "mqtt_client_id": "{{ .environment }}-{{ .device.device_id }}",
+  "mqtt_topic": "home/shelly/{{ .device.name }}/status",
+
+  "gateway_ip": "{{ index (index .devices \"gateway-device\") \"ip_address\" }}",
+  "coordinator_url": "http://{{ index (index .devices \"coordinator\") \"ip_address\" }}:8080",
+
+  "api_url": "{{ .api.endpoint }}/devices/{{ .device.device_id }}",
+  "device_identifier": "{{ .device.name }} ({{ .device.ip_address }})"
+}

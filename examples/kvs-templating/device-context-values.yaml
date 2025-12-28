@@ -1,0 +1,38 @@
+# Example values.yaml demonstrating device context usage
+# This file is used with: shelly-gitops push --values device-context-values.yaml
+
+# Environment configuration
+environment: production
+
+# API configuration
+api:
+  endpoint: https://api.example.com
+  timeout: 30
+
+# MQTT configuration
+mqtt:
+  broker: mqtt.example.com
+  port: 1883
+  qos: 1
+
+# Backup configuration
+backup:
+  host: backup.example.com
+  port: 8080
+
+# Feature flags
+features:
+  enableLogging: true
+  debugMode: false
+
+# Device-specific notes:
+# - {{ .device.ip_address }} - IP address of current device
+# - {{ .device.name }} - Name of current device
+# - {{ .device.device_id }} - Device ID of current device
+# - {{ .device.mac_address }} - MAC address of current device
+# - {{ .device.model }} - Model of current device
+# - {{ .device.folder }} - Folder name of current device
+#
+# Access other devices:
+# - {{ index .devices "device-id" "ip_address" }} - IP of another device
+# - {{ index .devices "device-id" "name" }} - Name of another device

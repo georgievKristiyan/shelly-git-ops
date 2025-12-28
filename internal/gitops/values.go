@@ -32,8 +32,8 @@ func LoadValuesFile(path string) (Values, error) {
 	return values, nil
 }
 
-// RenderTemplate renders a Go template string with the given values
-func RenderTemplate(tmplStr string, values Values) (string, error) {
+// RenderTemplate renders a Go template string with the given context
+func RenderTemplate(tmplStr string, context map[string]interface{}) (string, error) {
 	// Create template with option to treat missing keys as errors
 	tmpl, err := template.New("kvs").Option("missingkey=error").Parse(tmplStr)
 	if err != nil {
@@ -41,10 +41,10 @@ func RenderTemplate(tmplStr string, values Values) (string, error) {
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, values); err != nil {
+	if err := tmpl.Execute(&buf, context); err != nil {
 		// Provide more helpful error message
-		return "", fmt.Errorf("failed to execute template '%s' with values: %w\nAvailable keys: %v",
-			tmplStr, err, getMapKeys(values))
+		return "", fmt.Errorf("failed to execute template '%s' with context: %w\nAvailable keys: %v",
+			tmplStr, err, getMapKeys(context))
 	}
 
 	return buf.String(), nil
@@ -66,9 +66,62 @@ func IsTemplated(value string) bool {
 	return templatePattern.MatchString(value)
 }
 
+// DeviceContext represents device information available in templates
+type DeviceContext struct {
+	DeviceID   string `yaml:"device_id"`
+	Name       string `yaml:"name"`
+	Model      string `yaml:"model"`
+	IPAddress  string `yaml:"ip_address"`
+	MACAddress string `yaml:"mac_address"`
+	Folder     string `yaml:"folder"`
+}
+
+// TemplateContext combines values and device information for template rendering
+type TemplateContext struct {
+	Values  Values                    // User-provided values from values.yaml
+	Device  DeviceContext             // Current device being processed
+	Devices map[string]DeviceContext  // All devices by device ID
+}
+
+// CreateTemplateContext creates a template context with values and device info
+func CreateTemplateContext(values Values, currentDevice DeviceContext, allDevices map[string]DeviceContext) map[string]interface{} {
+	context := make(map[string]interface{})
+
+	// Add all values from values.yaml at the root level
+	for k, v := range values {
+		context[k] = v
+	}
+
+	// Add device-specific context
+	context["device"] = map[string]interface{}{
+		"device_id":   currentDevice.DeviceID,
+		"name":        currentDevice.Name,
+		"model":       currentDevice.Model,
+		"ip_address":  currentDevice.IPAddress,
+		"mac_address": currentDevice.MACAddress,
+		"folder":      currentDevice.Folder,
+	}
+
+	// Add all devices map
+	devicesMap := make(map[string]interface{})
+	for deviceID, device := range allDevices {
+		devicesMap[deviceID] = map[string]interface{}{
+			"device_id":   device.DeviceID,
+			"name":        device.Name,
+			"model":       device.Model,
+			"ip_address":  device.IPAddress,
+			"mac_address": device.MACAddress,
+			"folder":      device.Folder,
+		}
+	}
+	context["devices"] = devicesMap
+
+	return context
+}
+
 // RenderKVSValue renders a KVS value if it's a template, otherwise returns it as-is
 // Returns the rendered value and whether it was templated
-func RenderKVSValue(value interface{}, values Values) (interface{}, bool, error) {
+func RenderKVSValue(value interface{}, context map[string]interface{}) (interface{}, bool, error) {
 	// Only process string values
 	strValue, ok := value.(string)
 	if !ok {
@@ -81,7 +134,7 @@ func RenderKVSValue(value interface{}, values Values) (interface{}, bool, error)
 	}
 
 	// Render the template
-	rendered, err := RenderTemplate(strValue, values)
+	rendered, err := RenderTemplate(strValue, context)
 	if err != nil {
 		return nil, true, err
 	}

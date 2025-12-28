@@ -108,6 +108,97 @@ While `{{ .test_key }}` *should* work for map keys with underscores, if you enco
 }
 ```
 
+## Device Context
+
+Templates have access to device information, allowing you to reference the current device or other devices in your manifest.
+
+### Current Device Information
+
+Access the current device being processed using the `.device` context:
+
+```json
+{
+  "my_ip": "{{ .device.ip_address }}",
+  "my_name": "{{ .device.name }}",
+  "my_id": "{{ .device.device_id }}",
+  "my_mac": "{{ .device.mac_address }}",
+  "my_model": "{{ .device.model }}",
+  "my_folder": "{{ .device.folder }}"
+}
+```
+
+### Other Devices
+
+Access information about other devices using the `.devices` map. Use **nested** `index` functions to access devices by their device ID:
+
+```json
+{
+  "gateway_ip": "{{ index (index .devices \"gateway-device\") \"ip_address\" }}",
+  "sensor_name": "{{ index (index .devices \"sensor-01\") \"name\" }}"
+}
+```
+
+**Important:** You must use nested `index` calls because `.devices` is a map of maps:
+- First `index`: gets the device object from `.devices` map using the device ID
+- Second `index`: gets the specific field (like "ip_address") from that device object
+
+### Use Cases
+
+**1. Device identification in logs or API calls:**
+```json
+{
+  "device_identifier": "{{ .device.name }} ({{ .device.ip_address }})",
+  "mqtt_topic": "home/shelly/{{ .device.device_id }}/status"
+}
+```
+
+**2. Cross-device communication:**
+```json
+{
+  "gateway_url": "http://{{ index (index .devices \"gateway\") \"ip_address\" }}:8080",
+  "coordinator_ip": "{{ index (index .devices \"coordinator\") \"ip_address\" }}"
+}
+```
+
+**3. Environment-specific + device-specific configuration:**
+```json
+{
+  "api_endpoint": "{{ .api.endpoint }}/devices/{{ .device.device_id }}",
+  "backup_server": "{{ .backup.host }}:{{ .backup.port }}",
+  "device_name": "{{ .environment }}-{{ .device.name }}"
+}
+```
+
+**Example with multiple values:**
+
+**values.yaml:**
+```yaml
+environment: production
+mqtt:
+  broker: mqtt.example.com
+  port: 1883
+```
+
+**kvs/data.json:**
+```json
+{
+  "mqtt_server": "{{ .mqtt.broker }}:{{ .mqtt.port }}",
+  "mqtt_client_id": "{{ .environment }}-{{ .device.device_id }}",
+  "mqtt_topic": "{{ .environment }}/{{ .device.name }}/status",
+  "coordinator_ip": "{{ index (index .devices \"main-coordinator\") \"ip_address\" }}"
+}
+```
+
+**Pushed to device (example):**
+```json
+{
+  "mqtt_server": "mqtt.example.com:1883",
+  "mqtt_client_id": "production-shelly1pm-abc123",
+  "mqtt_topic": "production/Living Room Light/status",
+  "coordinator_ip": "192.168.1.100"
+}
+```
+
 ## How It Works
 
 ### During Push

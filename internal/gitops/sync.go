@@ -406,6 +406,20 @@ func (sm *SyncManager) PushToDevices(ctx context.Context, dryRun bool, deviceFil
 	if err != nil {
 		return nil, fmt.Errorf("failed to load values file: %w", err)
 	}
+
+	// Build allDevices map for template context
+	allDevices := make(map[string]DeviceContext)
+	for _, device := range sm.manifest.Devices {
+		allDevices[device.DeviceID] = DeviceContext{
+			DeviceID:   device.DeviceID,
+			Name:       device.Name,
+			Model:      device.Model,
+			IPAddress:  device.IPAddress,
+			MACAddress: device.MACAddress,
+			Folder:     device.Folder,
+		}
+	}
+
 	// Filter devices if a filter is provided
 	devicesToPush := sm.manifest.Devices
 	if len(deviceFilter) > 0 {
@@ -433,7 +447,7 @@ func (sm *SyncManager) PushToDevices(ctx context.Context, dryRun bool, deviceFil
 	for i, device := range devicesToPush {
 		i, device := i, device
 		g.Go(func() error {
-			result := sm.pushDeviceConfig(ctx, device, dryRun, values)
+			result := sm.pushDeviceConfig(ctx, device, dryRun, values, allDevices)
 			results[i] = result
 			return nil
 		})
@@ -447,7 +461,7 @@ func (sm *SyncManager) PushToDevices(ctx context.Context, dryRun bool, deviceFil
 }
 
 // pushDeviceConfig pushes configuration to a single device
-func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Device, dryRun bool, values Values) SyncResult {
+func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Device, dryRun bool, values Values, allDevices map[string]DeviceContext) SyncResult {
 	result := SyncResult{
 		DeviceID: device.DeviceID,
 		Success:  false,
@@ -463,6 +477,17 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 		result.Message = "dry-run: would push all configurations"
 		return result
 	}
+
+	// Create template context with device information
+	currentDevice := DeviceContext{
+		DeviceID:   device.DeviceID,
+		Name:       device.Name,
+		Model:      device.Model,
+		IPAddress:  device.IPAddress,
+		MACAddress: device.MACAddress,
+		Folder:     device.Folder,
+	}
+	templateContext := CreateTemplateContext(values, currentDevice, allDevices)
 
 	// Push component configs
 	componentFiles, err := sm.deviceStorage.ListComponentConfigs(device.Folder)
@@ -715,15 +740,15 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 		// Set or update keys from local KVS (with template rendering)
 		for key, value := range localKVS {
 			// Render template if value is templated
-			renderedValue, wasTemplated, err := RenderKVSValue(value, values)
+			renderedValue, wasTemplated, err := RenderKVSValue(value, templateContext)
 			if err != nil {
-				result.Message = fmt.Sprintf("failed to render template for KVS key %s: %v", key, err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to render template for KVS key %s: %v\n", key, err)
 				continue
 			}
 
 			// Use rendered value for push
 			if err := sm.shellyClient.SetKVS(ctx, device.IPAddress, key, renderedValue); err != nil {
-				result.Message = fmt.Sprintf("failed to set KVS key %s: %v", key, err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to set KVS key %s: %v\n", key, err)
 				continue
 			}
 
