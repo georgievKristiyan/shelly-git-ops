@@ -177,6 +177,16 @@ func (sm *SyncManager) pullDeviceConfig(ctx context.Context, device storage.Devi
 	// Save each component configuration separately
 	configCount := 0
 	for componentKey, componentConfig := range configMap {
+		// Skip cloud config (read-only, only cloud can update)
+		if componentKey == "cloud" {
+			continue
+		}
+
+		// Skip script configs (managed separately in scripts folder)
+		if strings.HasPrefix(componentKey, "script:") {
+			continue
+		}
+
 		// componentKey format: "switch:0", "input:1", "sys", "wifi", etc.
 		// Convert to filename: "switch-0.json", "input-1.json", "sys.json", "wifi.json"
 		filename := strings.ReplaceAll(componentKey, ":", "-")
@@ -498,14 +508,26 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 
 	configCount := 0
 	for _, componentFile := range componentFiles {
+		// Skip cloud config (read-only, only cloud can update)
+		if componentFile == "cloud" {
+			continue
+		}
+
+		// Skip script configs (managed separately in scripts folder)
+		if strings.HasPrefix(componentFile, "script-") {
+			continue
+		}
+
 		configData, err := sm.deviceStorage.LoadComponentConfig(device.Folder, componentFile)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to load config %s: %v\n", componentFile, err)
 			continue
 		}
 
 		// Parse config
 		var config map[string]interface{}
 		if err := json.Unmarshal(configData, &config); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to parse config %s: %v\n", componentFile, err)
 			continue
 		}
 
@@ -541,7 +563,7 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 
 		// Apply config
 		if err := sm.shellyClient.SetComponentConfig(ctx, device.IPAddress, componentName, params); err != nil {
-			result.Message = fmt.Sprintf("failed to set %s config: %v", componentFile, err)
+			fmt.Fprintf(os.Stderr, "Error: Failed to set %s config: %v\n", componentFile, err)
 			continue
 		}
 
@@ -551,24 +573,26 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 	// Push scripts
 	scripts, err := sm.deviceStorage.ListScripts(device.Folder)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to list scripts: %w", err)
-		return result
+		// If scripts directory doesn't exist, that's OK - just skip scripts
+		scripts = []storage.ScriptMetadata{}
+	}
+
+	// Get device scripts once for comparison
+	deviceScripts, err := sm.shellyClient.ListScripts(ctx, device.IPAddress)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Failed to list device scripts: %v\n", err)
+		deviceScripts = []shelly.Script{} // Continue with empty list
 	}
 
 	scriptCount := 0
 	for _, scriptMeta := range scripts {
 		code, err := sm.deviceStorage.LoadScript(device.Folder, scriptMeta.ID)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to load script %d: %v\n", scriptMeta.ID, err)
 			continue
 		}
 
 		// Check if script exists on device
-		deviceScripts, err := sm.shellyClient.ListScripts(ctx, device.IPAddress)
-		if err != nil {
-			result.Error = fmt.Errorf("failed to list device scripts: %w", err)
-			return result
-		}
-
 		var existingScript *shelly.Script
 		scriptExists := false
 		for _, ds := range deviceScripts {
@@ -583,53 +607,54 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 			// Create script
 			id, err := sm.shellyClient.CreateScript(ctx, device.IPAddress, scriptMeta.Name)
 			if err != nil {
-				result.Error = fmt.Errorf("failed to create script: %w", err)
-				return result
+				fmt.Fprintf(os.Stderr, "Error: Failed to create script %s: %v\n", scriptMeta.Name, err)
+				continue
 			}
 			scriptMeta.ID = id
 		} else if existingScript.Running {
 			// Script is running, stop it before uploading
 			if err := sm.shellyClient.StopScript(ctx, device.IPAddress, scriptMeta.ID); err != nil {
-				result.Error = fmt.Errorf("failed to stop running script %d: %w", scriptMeta.ID, err)
-				return result
+				fmt.Fprintf(os.Stderr, "Error: Failed to stop running script %d: %v\n", scriptMeta.ID, err)
+				continue
 			}
 		}
 
 		// Upload script code
 		if err := sm.shellyClient.PutScriptCode(ctx, device.IPAddress, scriptMeta.ID, code, false); err != nil {
-			result.Error = fmt.Errorf("failed to upload script: %w", err)
-			return result
+			fmt.Fprintf(os.Stderr, "Error: Failed to upload script %d: %v\n", scriptMeta.ID, err)
+			continue
 		}
 
 		// Set script config (name and enable state from metadata)
 		if err := sm.shellyClient.SetScriptConfig(ctx, device.IPAddress, scriptMeta.ID, scriptMeta.Name, scriptMeta.Enable); err != nil {
-			result.Error = fmt.Errorf("failed to set script config: %w", err)
-			return result
+			fmt.Fprintf(os.Stderr, "Error: Failed to set script %d config: %v\n", scriptMeta.ID, err)
+			continue
 		}
 
 		// Start script if it should be enabled
 		if scriptMeta.Enable {
 			if err := sm.shellyClient.StartScript(ctx, device.IPAddress, scriptMeta.ID); err != nil {
 				// Don't fail the whole operation if start fails, just log it
-				result.Message = fmt.Sprintf("uploaded script %d but failed to start: %v", scriptMeta.ID, err)
+				fmt.Fprintf(os.Stderr, "Warning: Uploaded script %d but failed to start: %v\n", scriptMeta.ID, err)
 			}
 		}
 
+		fmt.Fprintf(os.Stderr, "Info: Pushed script %d (%s)\n", scriptMeta.ID, scriptMeta.Name)
 		scriptCount++
 	}
 
 	// Push schedules
 	localSchedules, err := sm.deviceStorage.ListSchedules(device.Folder)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to list schedules: %w", err)
-		return result
+		// If schedules directory doesn't exist, that's OK - just skip schedules
+		localSchedules = []*shelly.Schedule{}
 	}
 
 	// Get device schedules for comparison
 	deviceSchedules, err := sm.shellyClient.ListSchedules(ctx, device.IPAddress)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to list device schedules: %w", err)
-		return result
+		fmt.Fprintf(os.Stderr, "Error: Failed to list device schedules: %v\n", err)
+		deviceSchedules = []shelly.Schedule{}
 	}
 
 	// Create maps for easier lookup
@@ -650,13 +675,13 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 		if _, exists := deviceScheduleMap[localSchedule.ID]; exists {
 			// Update existing schedule
 			if err := sm.shellyClient.UpdateSchedule(ctx, device.IPAddress, *localSchedule); err != nil {
-				result.Message = fmt.Sprintf("failed to update schedule %d: %v", localSchedule.ID, err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to update schedule %d: %v\n", localSchedule.ID, err)
 				continue
 			}
 		} else {
 			// Create new schedule
 			if _, err := sm.shellyClient.CreateSchedule(ctx, device.IPAddress, *localSchedule); err != nil {
-				result.Message = fmt.Sprintf("failed to create schedule: %v", err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to create schedule: %v\n", err)
 				continue
 			}
 		}
@@ -667,7 +692,7 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 	for _, deviceSchedule := range deviceSchedules {
 		if _, exists := localScheduleMap[deviceSchedule.ID]; !exists {
 			if err := sm.shellyClient.DeleteSchedule(ctx, device.IPAddress, deviceSchedule.ID); err != nil {
-				result.Message = fmt.Sprintf("failed to delete schedule %d: %v", deviceSchedule.ID, err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to delete schedule %d: %v\n", deviceSchedule.ID, err)
 			}
 		}
 	}
@@ -675,15 +700,15 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 	// Push webhooks
 	localWebhooks, err := sm.deviceStorage.ListWebhooks(device.Folder)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to list webhooks: %w", err)
-		return result
+		// If webhooks directory doesn't exist, that's OK - just skip webhooks
+		localWebhooks = []*shelly.Webhook{}
 	}
 
 	// Get device webhooks for comparison
 	deviceWebhooks, err := sm.shellyClient.ListWebhooks(ctx, device.IPAddress)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to list device webhooks: %w", err)
-		return result
+		fmt.Fprintf(os.Stderr, "Error: Failed to list device webhooks: %v\n", err)
+		deviceWebhooks = []shelly.Webhook{}
 	}
 
 	// Create maps for easier lookup
@@ -704,13 +729,13 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 		if _, exists := deviceWebhookMap[localWebhook.ID]; exists {
 			// Update existing webhook
 			if err := sm.shellyClient.UpdateWebhook(ctx, device.IPAddress, *localWebhook); err != nil {
-				result.Message = fmt.Sprintf("failed to update webhook %d: %v", localWebhook.ID, err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to update webhook %d: %v\n", localWebhook.ID, err)
 				continue
 			}
 		} else {
 			// Create new webhook
 			if _, err := sm.shellyClient.CreateWebhook(ctx, device.IPAddress, *localWebhook); err != nil {
-				result.Message = fmt.Sprintf("failed to create webhook: %v", err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to create webhook: %v\n", err)
 				continue
 			}
 		}
@@ -721,7 +746,7 @@ func (sm *SyncManager) pushDeviceConfig(ctx context.Context, device storage.Devi
 	for _, deviceWebhook := range deviceWebhooks {
 		if _, exists := localWebhookMap[deviceWebhook.ID]; !exists {
 			if err := sm.shellyClient.DeleteWebhook(ctx, device.IPAddress, deviceWebhook.ID); err != nil {
-				result.Message = fmt.Sprintf("failed to delete webhook %d: %v", deviceWebhook.ID, err)
+				fmt.Fprintf(os.Stderr, "Error: Failed to delete webhook %d: %v\n", deviceWebhook.ID, err)
 			}
 		}
 	}
